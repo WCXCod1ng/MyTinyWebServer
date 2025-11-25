@@ -8,6 +8,7 @@
 #include <csignal>
 #include <cstring>
 #include <fcntl.h>
+#include <iostream>
 #include <strings.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -30,7 +31,7 @@
 WebServer::WebServer(ServerConfig config):
     m_config(std::move(config)), // 获取配置信息
     m_thread_pool(m_config.thread_num, m_config.max_requests), // 初始化线程池，对应thread_pool()
-    m_sql_pool(mysql_conn_pool::get_instance()), // 获取数据库连接池单例的引用
+    // m_sql_pool(mysql_conn_pool::get_instance()), // 获取数据库连接池单例的引用
     m_stop_server(false) // 初始化停止标志
 {
     // 初始化日志系统，对应log_write
@@ -38,8 +39,8 @@ WebServer::WebServer(ServerConfig config):
         // do somethings
     }
 
-    // 初始化数据库连接池，对应sql_conn()
-    m_sql_pool.init("127.0.0.1", m_config.db_user, m_config.db_password, m_config.db_name, 3306, m_config.sql_conn_num);
+    // // 初始化数据库连接池，对应sql_conn()
+    // m_sql_pool.init(m_config.db_url, m_config.db_user, m_config.db_password, m_config.db_name, m_config.db_port, m_config.sql_conn_num);
 
     // 实现eventListen()，它有三部分组成：配置监听socket、配置epoll、配置信号处理器
     try {
@@ -64,13 +65,21 @@ WebServer::~WebServer() {
 /// 公共入口函数：启动服务器
 void WebServer::run() {
     // 日志
-    std::cout << "========== Server starting ==========" << std::endl;
+    LOG_INFO("========== Server starting ==========");
     // 启动定时器（如果需要，例如周期性的SIGALRM）
     // 在我们的新设计中，我们会在event_loop中处理，所以这里可以为空
 
     event_loop(); // 进入主事件循环
 
-    std::cout << "========== Server stopping ==========" << std::endl;
+    LOG_INFO("========== Server stopping ==========");
+}
+
+void WebServer::get(const std::string& url, myhttp::ApiHandler handler) {
+    m_router.get(url, std::move(handler));
+}
+
+void WebServer::post(const std::string &url, myhttp::ApiHandler handler) {
+    m_router.post(url, std::move(handler));
 }
 
 
@@ -155,6 +164,7 @@ void WebServer::setup_epoll_and_signals() {
     // 将监听socket加入epoll
     epoll_event event;
     event.data.fd = m_listen_fd;
+    // note 监听线程不需要注册EPOLLONESHOT，因为自始至终都只有它一个线程在处理连接，不存在鬓发问题
     event.events = EPOLLIN | EPOLLRDHUP; // 监听可读事件，以及连接被对方关闭的事件
     // ET触发模式如果开启，则使用ET触发模式
     if(m_config.listen_trig_mode == TriggerMode::ET) {
@@ -166,7 +176,7 @@ void WebServer::setup_epoll_and_signals() {
     }
 
     // 监听socket设置为非阻塞
-    // note 对于ET模式，一定要开启非阻塞，否则因为读或写没有后续事件而导致无法返回，进而饥饿，但是LT也需要开启非阻塞？
+    // note 对于ET模式，一定要开启非阻塞，否则因为读或写没有后续事件而导致无法返回，进而饥饿，但是LT也需要开启非阻塞？答案是也需要
     set_nonblocking(m_listen_fd);
 
     // 创建信号管道
@@ -223,7 +233,12 @@ void WebServer::event_loop() {
             else if (sockfd == m_pipe_fd[0]) {
                 // fixme 万一不是可读事件呢？
                 // 2. 处理信号
-                handle_signal();
+                if(triggered_events & EPOLLIN) {
+                    handle_signal();
+                } else {
+                    // 会报错？
+                    LOG_ERROR("意外的信号，不是可读事件");
+                }
             }
             else {
                 // 3. 处理已连接客户端的事件（读、写、关闭）
@@ -257,8 +272,26 @@ void WebServer::add_signal(int sig, void(handler)(int), bool restart) {
     assert(sigaction(sig, &sa, NULL) != -1);
 }
 
+// 重置EPOLLONESHOT事件
+void WebServer::modfd(int sockfd, uint32_t events) const {
+    // ===================================================================
+    // 新增的 modfd 实现
+    // ===================================================================
+    epoll_event event;
+    event.data.fd = sockfd;
+    if(m_config.conn_trig_mode == TriggerMode::ET) {
+        // 统一加上ET, ONESHOT, RDHUP
+        event.events = events | EPOLLET | EPOLLONESHOT | EPOLLRDHUP;
+    } else {
+        // LT模式则只需要后二者
+        event.events = events | EPOLLONESHOT | EPOLLRDHUP;
+    }
+    epoll_ctl(m_epoll_fd, EPOLL_CTL_MOD, sockfd, &event);
+}
+
 // 监听socket上有事件时被调用，用于处理新的连接
 void WebServer::handle_new_connection() {
+    LOG_DEBUG("处理连接请求");
     struct sockaddr_in client_address;
     socklen_t client_addrlength = sizeof(client_address);
 
@@ -273,35 +306,44 @@ void WebServer::handle_new_connection() {
             }
             std::cerr << "accept error: " << strerror(errno) << std::endl;
             // 日志
+            LOG_ERROR("accept error, 报错信息为: {}", strerror(errno));
             return;
         }
 
-        // 如果连接数达到上限（虽然我们用map移除了硬上限，但可以设置一个软上限）
+        // todo 如果连接数达到上限（虽然我们用map移除了硬上限，但可以设置一个软上限）
         // if (m_connections.size() >= MAX_CONNECTIONS) { ... }
 
         std::cout << "New connection from fd: " << connfd << std::endl;
 
-        // 1. 将新连接设置为非阻塞
+        // 1. 将新连接设置为非阻塞，这是ET必须要求的（LT模式最好设置）
         set_nonblocking(connfd);
 
         // 2. 创建HttpConnection对象并存入map
-        m_connections[connfd] = std::make_shared<HttpConnection>(connfd, &m_thread_pool);
+        auto epoll_modifier = [this](int fd, uint32_t ev) {
+            if(this->m_connections.contains(fd)) {
+                this->modfd(fd, ev);
+            }
+        };
+        // m_connections[connfd] = std::make_shared<HttpConnection>(connfd, client_address, m_config.m_root, m_sql_pool, m_router, epoll_modifier);
+        m_connections[connfd] = std::make_shared<HttpConnection>(connfd, client_address, m_config.m_root, m_router, epoll_modifier);
 
         // 3. 将新连接的fd注册到epoll
         epoll_event event;
         event.data.fd = connfd;
-        event.events = EPOLLIN | EPOLLRDHUP; // 监听读事件和连接关闭事件
+        // note 这里必须要使用ONESHOT，当一个 EPOLLONESHOT 事件被epoll_wait返回后，内核会自动禁用对这个socket的任何后续事件监听。即使数据再次到达，也不会再触发。你必须通过 epoll_ctl(MOD) 手动重新激活它，它正是为了解决Reactor模式下的竞争条件而生的。如果没有ONESHOT：
+        // 线程A（工作线程）正在处理sockfd的任务。
+        // 此时，客户端又发送了新数据，epoll因为没有ONESHOT而再次触发了EPOLLIN事件。
+        // 主线程响应这个新事件，将同一个sockfd的第二个任务交给了线程B。
+        // 现在，线程A和线程B正在并发地操作同一个HttpConnection对象，访问它的读写缓冲区、解析状态等。这是灾难性的数据竞争，会导致程序崩溃或数据损坏。
+        event.events = EPOLLIN | EPOLLRDHUP | EPOLLONESHOT; // 监听读事件和连接关闭事件（将来会被m_connections[connfd]所对应的HttpConnection处理）
         if (m_config.conn_trig_mode == TriggerMode::ET) {
             event.events |= EPOLLET;
         }
-        // 这里不使用ONESHOT，因为一个连接可能同时有读写事件，
-        // ONESHOT更适合于每个事件只由一个线程处理到底的场景。
-        // Reactor模式下，主循环需要持续关注事件。
         epoll_ctl(m_epoll_fd, EPOLL_CTL_ADD, connfd, &event);
 
         // 4. 为新连接设置定时器
         m_timer_manager.add_timer(connfd, m_config.connection_timeout, [this, connfd]() {
-            std::cout << "Connection timeout, closing fd " << connfd << std::endl;
+            LOG_ERROR("连接超时，自动关闭：{}", connfd);
             this->close_connection(connfd);
         });
 
@@ -310,6 +352,7 @@ void WebServer::handle_new_connection() {
 
 
 void WebServer::handle_connection_event(int sockfd, uint32_t events) {
+    LOG_INFO("处理客户端事件，socket描述符={}，事件类型={}", sockfd, events);
     auto it = m_connections.find(sockfd);
     if (it == m_connections.end()) {
         // 连接可能已经被定时器关闭了
@@ -317,12 +360,12 @@ void WebServer::handle_connection_event(int sockfd, uint32_t events) {
     }
     auto conn_ptr = it->second;
 
-    // 1. 处理连接关闭或错误事件
+    // 处理连接关闭或错误事件
     // EPOLLRDHUP: 对端关闭连接或写半部
     // EPOLLHUP: 连接被挂起
     // EPOLLERR: 发生错误
     if (events & (EPOLLRDHUP | EPOLLHUP | EPOLLERR)) {
-        std::cout << "Connection closed or error on fd " << sockfd << std::endl;
+        LOG_WARN("socket {} 对应的连接关闭，被挂起，或者发生错误", sockfd);
         close_connection(sockfd);
         return;
     }
@@ -330,29 +373,14 @@ void WebServer::handle_connection_event(int sockfd, uint32_t events) {
     // note 到此说明连接上有读写活动，刷新其定时器，延长生命周期
     m_timer_manager.adjust_timer(sockfd, m_config.connection_timeout);
 
-    // 2. 处理读事件
-    if (events & EPOLLIN) {
-        std::cout << "Read event on fd " << sockfd << std::endl;
-        // 每当有活动时，重置定时器
-        m_timer_manager.adjust_timer(sockfd, std::chrono::seconds(15));
 
-        // fixme 这里直接将任务交给线程池，实际上属于Reactor模式；而非Proactor模式
-        // 将读任务提交给线程池
-        // HttpConnection::process是该连接对象的处理函数
-        m_thread_pool.enqueue(&HttpConnection::handle_read, conn_ptr);
-
-    }
-
-    // 3. 处理写事件 (在实际应用中，只有在发送缓冲区满后才需要监听写事件)
-    if (events & EPOLLOUT) {
-        std::cout << "Write event on fd " << sockfd << std::endl;
-        m_timer_manager.adjust_timer(sockfd, std::chrono::seconds(15));
-
-        // fixme 这里直接将任务交给线程池，实际上属于Reactor模式；而非Proactor模式
-        // 将写任务提交给线程池
-        // 假设HttpConnection有专门的handle_write方法
-        m_thread_pool.enqueue(&HttpConnection::handle_write, conn_ptr);
-    }
+    // 统一处理读写事件
+    // fixme 这里直接将任务交给线程池，实际上属于Reactor模式；而非Proactor模式
+    LOG_INFO("处理客户端事件，将任务加入线程池");
+    bool isET = m_config.conn_trig_mode == TriggerMode::ET;
+    m_thread_pool.enqueue([conn_ptr, isET]() {
+       conn_ptr->process(isET);
+    });
 }
 
 void WebServer::handle_signal() {
@@ -387,20 +415,43 @@ void WebServer::signal_handler_callback(int sig) {
 }
 
 void WebServer::close_connection(int sockfd) {
-    if(m_connections.contains(sockfd)) {
-        // 从epoll中移除
-        epoll_ctl(m_epoll_fd, EPOLL_CTL_DEL, sockfd, nullptr);
+    // 1. 从epoll中移除，这是第一步，确保不再有任何事件被触发
+    //    即使有工作线程正在处理，处理完后也无法重新注册事件
+    epoll_ctl(m_epoll_fd, EPOLL_CTL_DEL, sockfd, nullptr);
 
-        // 关闭socket
+    // 2. 查找并从map中移除连接对象
+    const auto it = m_connections.find(sockfd);
+    if (it == m_connections.end()) {
+        // 如果map中没有，可能已经被其他原因关闭，直接关闭fd即可
         close(sockfd);
-
-        // 从map中移除HttpConnection对象，智能指针会自动释放内存
-        m_connections.erase(sockfd);
-
-        // 从定时器管理器中移除对应的定时器
         m_timer_manager.remove_timer(sockfd);
-
-        // todo http_conn::m_user_count--还没有处理
+        return;
     }
+
+    const auto conn_to_close = it->second;
+    m_connections.erase(it);
+
+    // 3. 通知HttpConnection对象它被关闭了
+    //    这会设置其内部的 m_is_closed 标志。
+    //    如果此时有工作线程在处理它，这个标志可以防止它做危险的操作。
+    conn_to_close->close_connection();
+
+    // 4. 关闭socket文件描述符
+    // SOKET清理的核心在于：close(sockfd) 这个系统调用。它是一个强大的“清理”命令，它告诉内核：
+    // “我不再关心这个socket了。”，实际上开始四次挥手的前两个阶段：服务器端关闭
+    // “请向对端发送FIN，开始关闭流程。”，调用close()会向客户端发送一个FIN包，表示（服务器）这边已经没有数据要发送了
+    // “如果接收缓冲区里还有未读的数据，请全部丢弃，并发送RST作为警告。”
+    // 也不需要担心客户端不规范的行为——即在对端close之后继续write：当客户端尝试在一个已经被服务器RST的连接上write时，它的write调用会失败，通常返回ECONNRESET (Connection reset by peer) 错误
+    close(sockfd);
+
+    // 5. 移除定时器
+    // note 一定要移除定时器，否则会因为定时器到期而close_connection被再次调用，导致close(sockfd)被执行两次
+    m_timer_manager.remove_timer(sockfd);
+
+    // todo http_conn::m_user_count--还没有处理
+
+    // 当 conn_to_close 这个 shared_ptr 离开作用域时，
+    // 如果没有其他地方引用它（在我们的设计中是没有的），
+    // HttpConnection 对象的析构函数将被自动调用，完成内部资源的清理。
 }
 

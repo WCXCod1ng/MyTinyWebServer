@@ -10,10 +10,20 @@ set(LIB_SOURCES
         http/http_conn.h
         log/logger.cpp
         log/logger.h
+        log/sink.h
+        log/file_sink.h
+        log/console_sink.h
+        log/file_sink.cpp
         utils/timer.cpp
         utils/timer.h
         utils/block_queue.h
         utils/concurrent_queue.h
+        http/router.cpp
+        http/router.h
+        http/http_define.h
+        utils/url.h
+        utils/restful.h
+        utils/error_handler.h
         # logger/logger.cpp  <-- 以后可以像这样添加更多源文件
         # thread_pool/thread_pool.cpp
 )
@@ -38,4 +48,6 @@ target_include_directories(WebServerLib
 target_link_libraries(WebServerLib
         PUBLIC
         mysqlclient
+        cereal::cereal
+        nlohmann_json::nlohmann_json
 )

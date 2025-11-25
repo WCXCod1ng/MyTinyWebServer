@@ -1,7 +1,7 @@
 //
 // Created by user on 2025/11/11.
 //
-#include "../../lib/thread_pool/thread_pool.h"
+#include "../../MyTinyWebServer/thread_pool/thread_pool.h"
 
 #include "gtest/gtest.h"
 

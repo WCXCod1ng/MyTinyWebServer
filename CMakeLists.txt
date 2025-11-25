@@ -22,11 +22,32 @@ FetchContent_Declare(
         GIT_TAG        v1.13.0 # 使用一个具体的、稳定的版本号！
 )
 
+# =======================================================
+# 集成 Cereal 库
+# =======================================================
+FetchContent_Declare(
+        cereal
+        GIT_REPOSITORY https://github.com/USCiLab/cereal.git
+        GIT_TAG        v1.3.2
+)
+
+
+# =======================================================
+# 集成 nlohmann/json 库
+# =======================================================
+FetchContent_Declare(
+        nlohmann_json
+        GIT_REPOSITORY https://github.com/nlohmann/json.git
+        GIT_TAG "v3.11.3" # 使用一个具体的、稳定的版本标签
+)
+
 
 # 3. 配置依赖并使其可用
 #    这一步会触发下载和配置
 FetchContent_MakeAvailable(
         googletest
+        cereal
+        nlohmann_json
 )
 
 ## =======================================================

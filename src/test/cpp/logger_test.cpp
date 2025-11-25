@@ -1,5 +1,5 @@
 #include "gtest/gtest.h"
-#include "../../lib/log/logger.h" // 你的日志头文件
+#include "../../MyTinyWebServer/log/logger.h" // 你的日志头文件
 #include <filesystem>
 #include <fstream>
 #include <vector>
@@ -61,11 +61,13 @@ TEST_F(LoggerTest, SyncMode_WritesToCorrectFolder) {
     config.log_folder = test_log_dir.string();
     config.max_queue_size = 0; // 同步模式
     config.flush_interval_seconds = 0; // 每次写入都刷新
+    config.enable_console_sink = true;
+    config.is_override = true;
 
     Logger& log = Logger::get_instance();
     log.init(config);
 
-    log.info("Hello, Sync Logger!");
+    LOG_INFO("Hello, Sync Logger!");
 
     // *** 修改点: 验证文件夹下是否生成了文件 ***
     ASSERT_EQ(count_files_in_dir(test_log_dir), 1) << "Log file was not created in the specified folder.";
@@ -81,11 +83,13 @@ TEST_F(LoggerTest, AsyncMode_StopFlushesQueue) {
     config.log_folder = test_log_dir.string();
     config.max_queue_size = 10; // 异步模式
     config.flush_interval_seconds = 0; // 每次写入都刷新
+    config.enable_console_sink = true;
+    config.is_override = true;
 
     Logger& log = Logger::get_instance();
     log.init(config);
 
-    log.info("Testing async write.");
+    LOG_INFO("Testing async write.");
 
     // 调用stop来确保队列被清空
     Logger::get_instance().stop();
@@ -103,13 +107,15 @@ TEST_F(LoggerTest, FileSplitting_ByLineCount) {
     config.max_lines_per_file = 10;
     config.max_queue_size = 0; // 同步模式以简化测试
     config.flush_interval_seconds = 0; // 每次写入都刷新
+    config.enable_console_sink = true;
+    config.is_override = true;
 
     Logger& log = Logger::get_instance();
     log.init(config);
 
     // 写入15行日志
     for (int i = 0; i < 15; ++i) {
-        log.info("Line number {}", i);
+        LOG_INFO("Line number {}", i);
     }
 
     // *** 修改点: 验证文件夹下是否生成了两个文件 ***
@@ -130,6 +136,8 @@ TEST_F(LoggerTest, AsyncMode_MultipleThreads_NoDataLoss) {
     config.max_queue_size = 100000;
     config.max_lines_per_file = 5000; // 设置一个较小的行数，强制在测试中发生文件切分
     config.flush_interval_seconds = 0; // 每次写入都刷新
+    config.enable_console_sink = true;
+    config.is_override = true;
 
     Logger& log = Logger::get_instance();
     log.init(config);
@@ -142,7 +150,7 @@ TEST_F(LoggerTest, AsyncMode_MultipleThreads_NoDataLoss) {
     for (int i = 0; i < num_threads; ++i) {
         threads.emplace_back([&log, i, messages_per_thread]() {
             for (int j = 0; j < messages_per_thread; ++j) {
-                log.info("Thread {} writing message {}", i, j);
+                LOG_INFO("Thread {} writing message {}", i, j);
             }
         });
     }
@@ -176,12 +184,14 @@ TEST_F(LoggerTest, FlushHappensAfterInterval) {
     config.log_folder = test_log_dir.string();
     config.max_queue_size = 1024; // 必须是异步模式
     config.flush_interval_seconds = 2; // 设置为一个非零的值，表示启用周期性刷新
+    config.enable_console_sink = true;
+    config.is_override = true;
 
     Logger::get_instance().init(config);
 
     // 2. Act & Assert Phase 1: 立即检查
     const std::string test_message = "A message that should be buffered.";
-    Logger::get_instance().info(test_message.c_str());
+    LOG_INFO(test_message.c_str());
 
     // 立刻读取日志文件，此时文件甚至可能还未创建，或者为空
     // 因为刷新间隔(2s)还远远没有到
@@ -206,12 +216,14 @@ TEST_F(LoggerTest, NoBufferingWhenFlushIntervalIsZero) {
     config.log_folder = test_log_dir.string();
     config.max_queue_size = 1024; // 异步模式
     config.flush_interval_seconds = 0; // 关键配置：立即刷新
+    config.enable_console_sink = true;
+    config.is_override = true;
 
     Logger::get_instance().init(config);
 
     // 2. Act
     const std::string test_message = "This should be flushed immediately.";
-    Logger::get_instance().warn(test_message.c_str());
+    LOG_INFO(test_message.c_str());
 
     // 3. Assert
     // 稍微等待一下，给后台线程一个执行周期的时间
@@ -231,12 +243,14 @@ TEST_F(LoggerTest, FinalFlushOnStop) {
     config.log_folder = test_log_dir.string();
     config.max_queue_size = 1024;
     config.flush_interval_seconds = 60; // 一个足够长的时间
+    config.enable_console_sink = true;
+    config.is_override = true;
 
     Logger::get_instance().init(config);
 
     // 2. Act
     const std::string test_message = "A final message before logger stops.";
-    Logger::get_instance().error(test_message.c_str());
+    LOG_ERROR(test_message.c_str());
 
     // 立即检查，确认日志仍在缓冲区中
     auto lines_before_stop = read_all_lines_from_dir(test_log_dir);
@@ -262,6 +276,8 @@ TEST_F(LoggerTest, AsyncMode_MultipleThreads_NoDataLoss_Enable_Flush_interval) {
     config.max_queue_size = 100000;
     config.max_lines_per_file = 5000; // 设置一个较小的行数，强制在测试中发生文件切分
     config.flush_interval_seconds = 1;
+    config.enable_console_sink = true;
+    config.is_override = true;
 
     Logger& log = Logger::get_instance();
     log.init(config);
@@ -289,7 +305,7 @@ TEST_F(LoggerTest, AsyncMode_MultipleThreads_NoDataLoss_Enable_Flush_interval) {
 
     // 使用单线程直观判断
     for(int i = 0; i < 100000; ++i) {
-        log.info("Thread {} writing message {}", i, heavy_string);
+        LOG_INFO("Thread {} writing message {}", i, heavy_string);
     }
 
     std::this_thread::sleep_for(std::chrono::seconds(10));

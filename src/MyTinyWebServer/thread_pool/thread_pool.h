@@ -9,6 +9,7 @@
 #include <queue>
 #include <vector>
 
+#include "log/logger.h"
 
 /// 这同样是一个生产者、消费者模型，因此我们在同步时也可以使用信号量。但是这里也可以使用另一种方式：条件变量，这也是现代C++编程实践中面对这类场景的更安全选择
 /// 1. 语义更清晰：工作线程等待的不是一个抽象的“计数”，而是一个具体的“条件”——任务队列不为空。使用条件变量的代码 m_condition.wait(lock, [this]{ return !this->m_tasks.empty(); }); 能够非常直白地表达这个意图，可读性更高。
@@ -82,6 +83,9 @@ auto ThreadPool::enqueue(F&& f, Args&&... args)
 
         // 将任务封装成一个无返回值的 std::function<void()> 后放入队列
         m_tasks.emplace([task](){ (*task)(); });
+
+        // 将任务加入线程池
+        LOG_INFO("加入后队列的大小为：{}", m_tasks.size());
     } // 锁在这里被释放
 
     // 5. 通知一个等待中的工作线程
@@ -155,6 +159,7 @@ inline void ThreadPool::worker_run() {
             // 使用 std::move 可以避免不必要的拷贝，提高效率
             task = std::move(m_tasks.front());
             m_tasks.pop();
+            LOG_INFO("从线程池中提取一个任务并完成，提取后队列大小为{}", m_tasks.size());
 
         } // unique_lock 在这里作用域结束，自动解锁
 
