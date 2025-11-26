@@ -18,9 +18,12 @@
 #include <functional>
 #include <source_location>
 #include <filesystem>
+#include <thread>
+#include <pthread.h>
 
 #include "sink.h"
 #include "../utils/block_queue.h"
+#include "base/utils.h"
 
 enum class LogLevel {
     DEBUG = 0, // 赋予确定的数值，便于比较
@@ -41,6 +44,10 @@ struct LogMessage {
     std::function<void(std::ostringstream&)> formatter;
     // 新增成员：存储日志调用点处的源码位置信息
     std::source_location location;
+    // 新增成员，存储调用日志的线程的线程ID
+    std::thread::id thread_id;
+    // 存储线程名
+    std::string thread_name;
 };
 
 /// 一个遵循单例模式的日志库
@@ -189,6 +196,8 @@ void Logger::log(
             }
         },
         .location = loc,
+        .thread_id = std::this_thread::get_id(),
+        .thread_name = getCurrentThreadName()
     };
 
     // 区分是同步还是异步，同步则当前线程完成，异步则交给阻塞队列

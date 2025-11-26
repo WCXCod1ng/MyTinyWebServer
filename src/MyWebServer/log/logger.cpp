@@ -207,13 +207,16 @@ std::string Logger::format_log_line(const LogMessage& msg) {
             default:
             level_str = " [ERROR] ";
     }
-    ss << level_str;
 
     // 源码位置信息
     std::string filepath = std::filesystem::path(loc.file_name()).string();
 
     // 格式化日志头
-    ss << std::format("{:%Y-%m-%d %H:%M:%S} {} {} {} {}:{}", now, level_str, filepath, loc.function_name(), loc.line(), loc.column());
+    ss << std::format("{} {:%Y-%m-%d %H:%M:%S}", level_str, now);
+
+    ss << " [" << msg.thread_name << "] "; // 线程名
+
+    ss << std::format("{} {} {}:{} ", filepath, loc.function_name(), loc.line(), loc.column());
 
     // 格式化用户消息
     try {

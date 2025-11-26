@@ -6,6 +6,7 @@ add_executable(run_tests
         cpp/thread_pool_test.cpp
         cpp/block_queue_test.cpp
         cpp/logger_test.cpp
+        cpp/simple_server_test.cpp
 )
 
 # 2. 链接测试程序需要的库

@@ -2,7 +2,8 @@
 #    目标名称为 "TinyWebServerApp"，源文件为 main.cpp
 add_executable(TinyWebServerApp
         main.cpp
-        controller.h)
+        controller.h
+        simple_server.cpp)
 
 # 2. 链接该可执行文件所需要的所有库
 #    这里我们链接在 lib 目录中创建的 WebServerLib 库
