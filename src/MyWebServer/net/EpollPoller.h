@@ -36,9 +36,11 @@ public:
     // kNew (未添加): 调用 epoll_ctl(EPOLL_CTL_ADD)，将 Channel 加入 map。
     // kAdded (已添加): 调用 epoll_ctl(EPOLL_CTL_MOD)，更新感兴趣的事件。
     // kDeleted (已删除): 类似 kNew，重新 ADD 进去（逻辑上复用）。
+    // 注意，删除事件（逻辑）的操作是由Channel::disableAll()来负责的
     void updateChannel(Channel* channel);
 
     // 从 Poller 中移除 Channel
+    // 这里的删除实际上是最后的清除，在服务指数时被执行
     void removeChannel(Channel* channel);
 
     // 判断 Channel 是否被当前 Poller 监控
@@ -49,7 +51,7 @@ private:
     static const int kInitEventListSize = 16;
 
     // 填写活跃的 Channel
-    ChannelList getActiveChannels(int numEvents) const;
+    [[nodiscard]] ChannelList getActiveChannels(int numEvents) const;
 
     // 执行真正的 epoll_ctl
     // 这是对系统调用 epoll_ctl 的最底层封装。

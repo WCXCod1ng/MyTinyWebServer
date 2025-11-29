@@ -19,26 +19,36 @@ static EventLoop* CheckLoopNotNull(EventLoop* loop) {
     return loop;
 }
 
+/// 这里主EventLoop是由外部指针传入的，其实只要保证主EventLoop生命周期大于TcpServer即可。为什么使用指针而非引用，主要是遵循muduo库中“非拥有型关系用裸指针”的规范
+/// 而且“一个主EventLoop会同时服务多个TcpServer”也造成了主EventLoop不能作为TcpServer的成员
 TcpServer::TcpServer(EventLoop* loop,
                      const InetAddress& listenAddr,
                      const std::string& nameArg,
                      const Option option,
-                     const size_t numThreads)
+                     const size_t numThreads,
+                     const double idleTimeoutSeconds)
     : baseLoop_(CheckLoopNotNull(loop)),
       ipPort_(listenAddr.toIpPort()),
       name_(nameArg),
       acceptor_(new Acceptor(loop, listenAddr, option == kReusePort)),
-      threadPool_(std::make_shared<EventLoopThreadPool>(loop, numThreads,name_)),
+      threadPool_(std::make_unique<EventLoopThreadPool>(loop, numThreads, name_)), // 创建线程池
       connectionCallback_(),
       messageCallback_(),
       nextConnId_(1),
-      started_(0)
+      started_(0),
+      idleTimeoutSeconds_(idleTimeoutSeconds)
 {
     // 设置 Acceptor 的回调：当有新连接时，执行 TcpServer::newConnection
     acceptor_->setNewConnectionCallback(
         std::bind(&TcpServer::newConnection, this, std::placeholders::_1, std::placeholders::_2));
 }
 
+/// muduo网络库的析构顺序：
+/// 1. TcpServer析构函数被触发，清理所有的TcpConnection（此时还计数为1，要等到connectDestroyed函数处理完后才会自动清零）
+///     - 等待异步调用connectDestroyed()负责执行实际的removeChannel()操作，将Channel从Epoller中删除.
+///     - connectDestroyed()结束后，TcpConnection因为引用计数减为0而调用~TcpConnection()：其内部使用unique_ptr管理了Channel，因此也触发了~Channel()（什么也不做，已经被connectDestroyed()清理完毕了）
+/// 2. 由于TcpServer内部通过unique_ptr管理了EventLoopThreadPool，因此~TcpServer()被执行后，紧接着会析构EventLoopThreadPool，并简介析构EventLoopThread
+/// 3. 主EventLoop的生命周期长于TcpServer，会在外部最后被析构
 TcpServer::~TcpServer()
 {
     baseLoop_->assertInLoopThread();
@@ -101,7 +111,8 @@ void TcpServer::newConnection(int sockfd, const InetAddress& peerAddr)
                                             connName,
                                             sockfd,
                                             localAddr,
-                                            peerAddr));
+                                            peerAddr,
+                                            60.0));
 
     // 5. 将连接放入 Map (Map 保存了 shared_ptr，引用计数 +1)
     connections_[connName] = conn;

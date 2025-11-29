@@ -15,17 +15,49 @@
 // 前向声明，为了解耦，Channel 只需要知道 EventLoop 类的存在即可
 class EventLoop;
 
+
+/// 为什么要为Channel设置三种状态，目的是：实现逻辑删除+延迟物理删除
+/// 如果不使用三态机，就意味着在删除时除了需要从map中也删除（因为此时“是否存在在map”中成为了判断是否删除的依据），还需要执行实际的物理删除（TcpConnection::removeConnection被调用），那么它很可能会被复用（相同的fd但映射了一个新的Channel，因为fd就那么多，在高并发场景下一定会被复用）或者即使不复用指针指向的值也是一个无效地址：但因为在注册事件时使用的是一个指向Channel的指针作为event.data，所以activeChannels数组中存储的event.data指向的还是旧的fd对应的*Channel，导致了指针崩溃，所以使用三态机的是为了防止在遍历activeChannels的过程中：（1）修改了map中fd对应的Channel指针（2）指向的内存失效，从而导致map与activeChannels不一致
+/// 不使用三态机，会导致如下的问题：
+/// 1. epoll_wait 返回 1000 个活跃 fd，其中 fd=7 对应 Channel A
+/// 2. EventLoop 开始遍历这 1000 个 Channel，调用 handleEvent()
+/// 3. 轮到 Channel A → 执行 readCallback → 发现对端关闭 → 调用 connection->shutdownInLoop()
+/// 4. shutdownInLoop() → channel->disableAll() → updateChannel(channel)
+/// 5. updateChannel() 发现 events_=0 → 直接 epoll_ctl(EPOLL_CTL_DEL, fd=7)，并且从map中移除掉了它
+/// 6. 继续遍历后面的 500 个 Channel……
+///    → 灾难发生了：后面的某个 Channel 恰好被分配到原来 Channel A 的内存地址
+///    → 或者 activeChannels 向量里还保存着已经 delete 的 Channel* 裸指针
+///    → 崩溃！空指针、野指针、double free 随便跳
+/// 所以在一次 epoll_wait 返回的活跃事件正在被回调的过程中，ChannelMap中的channel不会在本次遍历activeChannels过程中被删除（对应的channel也不会被析构），而是等到本次遍历结束后才会进行实际的删除
+/// 在使用三态机之后，一个正常的流程是：
+/// 1. epoll_wait 返回 1000 个事件（包括 fd=7 的 Channel A）
+/// 2. EventLoop 开始遍历 activeChannels
+/// 3. 处理到 Channel A → read() 返回 0 → 决定关闭连接
+/// 4. 调用 channel->disableAll() → events_ = 0 → 表明不关心这个事件了（是逻辑删除！！！）
+/// 5. 调用 updateChannel(channel)
+///    ├─ 发现当前是 kAdded，但 events_==0
+///    ├─ 执行 epoll_ctl(DEL) 把 fd=7 从 epoll 内核删掉
+///    ├─ 把状态改为 kDeleted（关键！没有析构！没有从 map 删！）
+///    └─ 返回
+/// 6. 继续安全地处理后面 500 个 Channel（此时 Channel A 还活着，指针有效）
+/// 7. 所有 1000 个事件都处理完毕，activeChannels 遍历结束
+/// 8. 下一次 poll 彻底结束
+/// 9. 用户代码调用 connection->forceClose() 或在下一次事件循环中调用 removeChannel(channel)
+///    ├─ 发现状态是 kDeleted
+///    ├─ 从 channels_ map 中 erase(fd)
+///    ├─ 状态改为 kNew（可选）
+///    └─ 现在才真正 delete Channel 对象
 enum class ChannelStatus {
-    kNew = -1, // 从未添加过
-    kAdded = 1, // 已添加到epoll中
-    kDeleted = 2 // 已从epoll删除
+    kNew = -1, // 从未添加过，不在channels_map中，不在epoll内核的红黑树中
+    kAdded = 1, // 已添加到epoll中，在channels_map中，在epoll内核的红黑树中
+    kDeleted = 2 // 已从epoll删除，必须在channels_map中，不在epoll内核的红黑树中
 };
 
-/// Channel 理解为通道，封装了 sockfd 和其感兴趣的 event，如 EPOLLIN、EPOLLOUT 事件
-/// 还绑定了 poller 返回的具体事件
-/// - 它不拥有文件描述符（fd），不负责关闭 fd（那是 Socket 或 TcpConnection 的事）。
-/// - 它只负责 “映射”：它把一个 fd 和它感兴趣的 IO 事件（读、写、错误）以及事件发生时对应的 回调函数 绑定在一起。
-/// - 如果没有 Channel，EpollPoller 就不知道该监听谁，EventLoop 也不知道事件发生后该调谁的函数。
+/// Channel作用是：
+/// 1. 封装：sockfd、其感兴趣的时间（如 EPOLLIN、EPOLLOUT）、poller实际返回的ready事件
+/// 2. 提供回调注册机制，负责为感兴趣的“事件”映射“相关的回调函数”
+/// 3. 作为一个Dispatcher，根据ready事件选择合适的回调函数去执行
+/// 4. 它不拥有文件描述符（fd），不负责关闭 fd（那是 Socket 或 TcpConnection 的事）。
 class Channel : NonCopyable {
 public:
     using EventCallback = std::function<void()>;

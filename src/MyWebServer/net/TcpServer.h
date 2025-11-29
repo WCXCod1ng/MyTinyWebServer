@@ -39,26 +39,36 @@ public:
               const InetAddress& listenAddr,
               const std::string& nameArg,
               Option option = kNoReusePort,
-              size_t numThreads = 0);
+              size_t numThreads = 0,
+              double idleTimeoutSeconds = 60.0);
     ~TcpServer();
 
     // 设置线程数量 (0 表示单线程，>0 表示多线程 Reactor)
     void setThreadNum(size_t numThreads);
 
-    // 线程初始化回调 (在 start 之后，线程启动之前执行)
+    /// 线程初始化回调 (在 start 之后，线程启动之前执行)
     void setThreadInitCallback(const ThreadInitCallback& cb) { threadInitCallback_ = cb; }
 
     // 开启服务器监听
     void start();
 
     // --- 注册用户回调 ---
+    /// 设置连接建立或关闭时的回调
     void setConnectionCallback(const ConnectionCallback& cb) { connectionCallback_ = cb; }
+    /// 设置收到对端发送的消息后的回调
     void setMessageCallback(const MessageCallback& cb) { messageCallback_ = cb; }
+    /// 设置写操作完毕后的回调
     void setWriteCompleteCallback(const WriteCompleteCallback& cb) { writeCompleteCallback_ = cb; }
 
-    const std::string& ipPort() const { return ipPort_; }
-    const std::string& name() const { return name_; }
-    EventLoop* getLoop() const { return baseLoop_; }
+    inline const std::string& ipPort() const { return ipPort_; }
+    inline const std::string& name() const { return name_; }
+    inline EventLoop* getLoop() const { return baseLoop_; }
+
+    inline void setIdleTimeoutSeconds(const double seconds) {
+        if(seconds > 0) {
+            idleTimeoutSeconds_ = seconds;
+        }
+    }
 
 private:
     /// Acceptor 有新连接时的回调
@@ -81,7 +91,7 @@ private:
     /// 监听器，核心逻辑是accept一个新连接
     std::unique_ptr<Acceptor> acceptor_;
     /// 线程池，存储所有的IO线程（专用于处理已连接socket）
-    std::shared_ptr<EventLoopThreadPool> threadPool_;
+    std::unique_ptr<EventLoopThreadPool> threadPool_;
 
     // 回调函数
     ConnectionCallback connectionCallback_; // 连接建立/断开后的回调
@@ -98,6 +108,9 @@ private:
     /// 所以 TcpServer 用一个 Map 持有它，保证它活着。
     /// 当连接断开时，从 Map 移除，引用计数归零（假设用户回调不持有），对象析构
     ConnectionMap connections_;
+
+    // 连接超时时间（用于移除长时间的连接）
+    double idleTimeoutSeconds_;
 };
 
 

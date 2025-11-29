@@ -68,7 +68,7 @@ private:
     // 轮询索引，主要是为了实现Round-Robin算法
     int next_;
 
-    // 管理所有的 IO 线程
+    // 独占管理所有的 IO 线程，当线程池被析构时，这些线程都会被执行
     std::vector<std::unique_ptr<EventLoopThread>> threads_;
     // 缓存所有的 IO EventLoop 指针（为了快速访问，避免频繁解引用线程对象）
     std::vector<EventLoop*> loops_;

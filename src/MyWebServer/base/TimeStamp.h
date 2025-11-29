@@ -15,9 +15,15 @@ public:
     TimeStamp() : micro_seconds_since_epoch_(0) {}
     explicit TimeStamp(int64_t microSecondsSinceEpoch) : micro_seconds_since_epoch_(microSecondsSinceEpoch) {}
 
+    /// 返回当前的时间戳
     static TimeStamp now() {
         return TimeStamp(std::chrono::duration_cast<std::chrono::microseconds>(
             std::chrono::system_clock::now().time_since_epoch()).count());
+    }
+
+    /// 返回一个无效的时间戳
+    static TimeStamp invalid() {
+        return {};
     }
 
     // 方便比较
@@ -27,6 +33,8 @@ public:
     [[nodiscard]] std::string toString() const; // 格式化为 "20250101 12:00:00.123456"
 
     [[nodiscard]] int64_t microSecondsSinceEpoch() const { return micro_seconds_since_epoch_; }
+
+    TimeStamp addSeconds(double seconds) const;
 
 private:
     int64_t micro_seconds_since_epoch_;
@@ -46,6 +54,12 @@ inline std::string TimeStamp::toString() const {
              tm_time.tm_hour, tm_time.tm_min, tm_time.tm_sec,
              microseconds);
     return {buf};
+}
+
+inline TimeStamp TimeStamp::addSeconds(double seconds) const {
+    TimeStamp time_stamp = TimeStamp::invalid();
+    time_stamp.micro_seconds_since_epoch_ = this->microSecondsSinceEpoch() + static_cast<uint64_t>(seconds * 1000000);
+    return time_stamp;
 }
 
 #endif //TIMESTAMP_H

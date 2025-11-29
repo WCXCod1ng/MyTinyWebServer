@@ -8,6 +8,7 @@
 #include <format>
 #include "Channel.h"
 #include "EpollPoller.h"
+#include "TimerQueue.h"
 #include "log/logger.h"
 // 防止一个线程创建多个 EventLoop
 // __thread 是 GCC 内置的线程局部存储，C++11 推荐用 thread_local
@@ -33,7 +34,8 @@ EventLoop::EventLoop()
       poller_(std::make_unique<EpollPoller>(this)),
       wakeupFd_(createEventfd()),
       wakeupChannel_(std::make_unique<Channel>(this, wakeupFd_)),
-      callingPendingFunctors_(false)
+      callingPendingFunctors_(false),
+      timerQueue_(std::make_unique<TimerQueue>(this)) // 初始化TimerQueue
 {
     std::stringstream ss;
     ss << threadId_;
@@ -48,7 +50,7 @@ EventLoop::EventLoop()
 
     // 设置 wakeupChannel 的事件类型，并注册读回调
     // 监听读事件 -> 当 queueInLoop 调用 wakeup() 写数据时，这里被触发
-    wakeupChannel_->setReadCallback(std::bind(&EventLoop::handleRead, this));
+    wakeupChannel_->setReadCallback(std::bind(&EventLoop::handleWakeupChannelRead, this));
     wakeupChannel_->enableReading();
 }
 
@@ -58,6 +60,26 @@ EventLoop::~EventLoop()
     wakeupChannel_->remove();
     ::close(wakeupFd_);
     t_loopInThisThread = nullptr;
+
+    // timerQueue_是unique_ptr，会自动析构
+}
+
+TimerId EventLoop::runAt(TimeStamp time, TimerCallback cb) {
+    return timerQueue_->addTimer(std::move(cb), time, 0.0);
+}
+
+TimerId EventLoop::runAfter(double delay, TimerCallback cb) {
+    TimeStamp time(TimeStamp::now().addSeconds(delay)); // 假设 TimeStamp 有 addTime 辅助函数
+    return runAt(time, std::move(cb));
+}
+
+TimerId EventLoop::runEvery(double interval, TimerCallback cb) {
+    TimeStamp time(TimeStamp::now().addSeconds(interval));
+    return timerQueue_->addTimer(std::move(cb), time, interval);
+}
+
+void EventLoop::cancel(TimerId timerId) {
+    return timerQueue_->cancel(timerId);
 }
 
 void EventLoop::loop()
@@ -75,7 +97,7 @@ void EventLoop::loop()
         // 你的 Poller::poll 返回 vector<Channel*>
         activeChannels_ = poller_->poll();
 
-        TimeStamp receiveTime = TimeStamp::now();
+        const TimeStamp receiveTime = TimeStamp::now();
 
         // 2. 处理活跃事件
         for (Channel* channel : activeChannels_) {
@@ -155,7 +177,7 @@ void EventLoop::wakeup()
 }
 
 /// 从 wakeupFd_ 里把那 8 个字节读出来。如果不读，下一次 epoll_wait 会认为还有数据，导致忙轮询（Busy Loop）
-void EventLoop::handleRead()
+void EventLoop::handleWakeupChannelRead()
 {
     uint64_t one = 1;
     ssize_t n;

@@ -50,6 +50,11 @@ set(LIB_SOURCES
         net/TcpServer.cpp
         net/TcpServer.h
         base/utils.h
+        net/Timer.cpp
+        net/Timer.h
+        net/TimerId.h
+        net/TimerQueue.cpp
+        net/TimerQueue.h
 )
 
 # 2. 创建一个库目标

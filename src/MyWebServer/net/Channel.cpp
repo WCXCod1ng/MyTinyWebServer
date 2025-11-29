@@ -78,8 +78,8 @@ void Channel::handleEvent(TimeStamp receiveTime)
     }
 }
 
-/// 核心逻辑：根据 revents_ 具体的事件类型，调用对应的回调函数
-/// Linux epoll 返回的事件标志位 (revents) 经常是混合的，处理逻辑有讲究：
+/// 核心逻辑：根据 revents_ 具体的事件类型，调用对应的回调函数——一个Dispatcher
+/// Linux epoll 返回的事件标志位 (revents) 经常是混合的，处理逻辑有讲究，如下是muduo库的经典做法：
 /// - EPOLLHUP (挂断)：通常表示 TCP 连接被对端重置或关闭。如果在没有 EPOLLIN 的情况下收到 HUP，我们直接调用 closeCallback_。
 /// - EPOLLERR (错误)：Socket 发生错误，调用 errorCallback_。
 /// - EPOLLIN | EPOLLPRI | EPOLLRDHUP (读)：
@@ -91,9 +91,8 @@ void Channel::handleEventWithGuard(TimeStamp receiveTime)
 {
     // LOG_INFO << "channel handleEvent revents: " << revents_;
 
-    // 1. 处理连接关闭 (EPOLLHUP)
-    // 当对端关闭连接时，epoll 会触发 EPOLLHUP。
-    // 注意：EPOLLHUP 经常和 EPOLLIN 一起出现。
+    // 1. EPOLLHUP表示读半部和写半部都已经被关闭（完全关闭），属于真正的关闭
+    // 注意：EPOLLHUP 经常和 EPOLLIN 一起出现，当一起出现时表明虽然连接关闭，但是还有残留的可读数据，那么不应当关闭，而是归类为可读（3）；只有“只有 EPOLLHUP 没有 EPOLLIN”时，才认为是异常挂起，直接关闭
     if ((revents_ & EPOLLHUP) && !(revents_ & EPOLLIN)) {
         LOG_WARN("Channel::handleEventWithGuard EPOLLHUP fd = {}", fd_);
         if (closeCallback_) closeCallback_();
@@ -106,6 +105,8 @@ void Channel::handleEventWithGuard(TimeStamp receiveTime)
     }
 
     // 3. 处理可读 (EPOLLIN) / 高优先级数据 (EPOLLPRI) / 对端关闭写 (EPOLLRDHUP)
+    // 注意：EPOLLRDHUP表明对端调用了close()或shutdown(SHUT_WR)，对端不能再发送数据了；但是本端仍然可以继续发送数据（读则会返回0，即EOF）
+    // 这里的意思是交给读回调的read()/recv()处理：（1）如果返回>0，正常数据；（2）如果返回0，对端关闭写方向（可能半关闭、也可能全关闭）；（3）如果返回-1+EAGAIN，暂时无数据
     if (revents_ & (EPOLLIN | EPOLLPRI | EPOLLRDHUP)) {
         LOG_INFO("有数据可读");
         if (readCallback_) readCallback_(receiveTime);

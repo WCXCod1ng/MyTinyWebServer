@@ -20,9 +20,10 @@ void defaultMessageCallback(const TcpConnectionPtr&, Buffer* buf, TimeStamp) {
 
 TcpConnection::TcpConnection(EventLoop* loop,
                              const std::string& nameArg,
-                             int sockfd,
+                             const int sockfd,
                              const InetAddress& localAddr,
-                             const InetAddress& peerAddr)
+                             const InetAddress& peerAddr,
+                             const double idleTimeoutSeconds)
     : ioLoop_(loop),
       name_(nameArg),
       state_(kConnecting),
@@ -31,7 +32,8 @@ TcpConnection::TcpConnection(EventLoop* loop,
       channel_(new Channel(loop, sockfd)),
       localAddr_(localAddr),
       peerAddr_(peerAddr),
-      highWaterMark_(64 * 1024 * 1024) // 64MB
+      highWaterMark_(64 * 1024 * 1024), // 64MB
+      idleTimeoutSeconds_(idleTimeoutSeconds)
 {
     // 给 Channel 设置回调函数
     // 当 Poller 监听到事件后，会调用 Channel::handleEvent，进而调用这些函数
@@ -74,13 +76,19 @@ void TcpConnection::connectEstablished()
     if (connectionCallback_) {
         connectionCallback_(shared_from_this());
     }
+
+    // 连接建立时启动定时器
+    extendLifetime();
 }
 
-// [核心] 处理读事件
+/// 已连接Channel发现可读时实际上会调用该函数，执行实际的读事件
 void TcpConnection::handleChannelRead(TimeStamp receiveTime)
 {
     ioLoop_->assertInLoopThread();
     int savedErrno = 0;
+
+    // 有数据来时说明对端还存活，应当刷新定时器
+    extendLifetime();
 
     // 从 Socket 读取数据读到 inputBuffer_
     // 利用 Buffer::readFd 的 readv 技术，自动处理读不够的情况
@@ -120,6 +128,21 @@ void TcpConnection::send(const std::string& buf)
     }
 }
 
+void TcpConnection::send(const void *message, size_t len) {
+    if (state_ == kConnected) {
+        if (ioLoop_->isInLoopThread()) {
+            // 在自己线程中调用，则直接执行
+            sendInLoop(message, len);
+        } else {
+            // 如果在其他线程调用 send，需要转发给 IO 线程
+            // 注意：这里必须拷贝 buf，因为它是引用，跨线程可能会失效
+            // 优化点：C++11 move 语义可以减少拷贝，或者 sendInLoopString
+            void (TcpConnection::*fp)(const void* data, size_t len) = &TcpConnection::sendInLoop;
+            ioLoop_->runInLoop(std::bind(fp, this, message, len));
+        }
+    }
+}
+
 // [核心] IO 线程内真正的发送逻辑
 void TcpConnection::sendInLoop(const void* data, size_t len)
 {
@@ -138,6 +161,9 @@ void TcpConnection::sendInLoop(const void* data, size_t len)
     // 条件：outputBuffer 没有积压数据（保证数据发送的有序性、outputBuffer中的数据是先发送的，应当先被write进socket） && Channel 没有关注写事件（关注了写事件会怎样？）
     if (!channel_->isWriting() && outputBuffer_.readableBytes() == 0) {
         LOG_DEBUG("触发zero copy优化，直接将待发送的数据写入socket");
+
+        // fixme 直接写入时是否需要延长？
+        extendLifetime();
 
         const char* ptr = static_cast<const char*>(data);
         // note ET模式下循环写，直到写完（或者写满）
@@ -198,12 +224,16 @@ void TcpConnection::sendInLoopString(const std::string &message) {
     throw std::runtime_error("未实现");
 }
 
-// [核心] 处理写事件 (EPOLLOUT)
-// 从Buffer中的“可读区”读取数据并写入socket
+/// 已连接Channel发现可写时实际上会调用该函数，执行实际的写事件
+/// 从Buffer中的“可读区”读取数据并写入socket
 void TcpConnection::handleChannelWrite()
 {
     ioLoop_->assertInLoopThread();
     if (channel_->isWriting()) { // 当前Channel关注了写事件
+
+        // 有数据可写入时，可以刷新定时器
+        extendLifetime();
+
         int saveErrno = 0;
         // 将 outputBuffer_ 中的数据写入 Socket
         ssize_t n = outputBuffer_.writeFd(channel_->fd(), &saveErrno);
@@ -281,12 +311,33 @@ void TcpConnection::forceCloseInLoop()
     }
 }
 
-/// [被动关闭] 核心逻辑
+void TcpConnection::extendLifetime() {
+    // 如果定时器句柄是dangling的，说明这是首次调用extendLifetime（也即TcpConnection建立后通过connectEstablished所调用的），那么不需要操作，直接等待赋值即可
+    // 如果不是dangling的，那么先取消旧的定时器
+    if(ioLoop_ && !idleTimer_.dangling()) {
+        ioLoop_->cancel(idleTimer_);
+    }
+
+    // 添加新的
+    idleTimer_ = ioLoop_->runAfter(idleTimeoutSeconds_, std::bind(&TcpConnection::handleTimeout, shared_from_this()));
+}
+
+void TcpConnection::handleTimeout() {
+    // 定时器到期，说明这段时间内没有 extendLife 被调用
+    LOG_INFO("TcpConnection::handleTimeout - Force Close fd={}", channel_->fd());
+
+    // 强制关闭连接
+    forceClose();
+    // forceClose 会触发 handleClose -> removeConnection -> connectDestroyed
+    // 最终完成清理
+}
+
+/// [被动关闭] 已连接Channel发现连接完全关闭时实际上会调用该函数，执行实际的关闭事件
 /// 是触发动作。当 read 返回 0 或 forceClose 被调用时执行。它的核心任务是通知 TcpServer：“我这个连接完了，请把我删掉”
 void TcpConnection::handleChannelClose()
 {
     ioLoop_->assertInLoopThread();
-    LOG_INFO("fd={} state={}", channel_->fd(), (int)state_);
+    LOG_INFO("对端连接关闭：fd={} state={}", channel_->fd(), (int)state_);
     setState(kDisconnected);
 
     // 1. 停止关注所有事件
@@ -305,6 +356,7 @@ void TcpConnection::handleChannelClose()
     }
 }
 
+/// 已连接Channel发现连接出异常错误时实际上会调用该函数，执行实际的异常处理事件
 void TcpConnection::handleChannelError()
 {
     int optval;
@@ -335,6 +387,12 @@ void TcpConnection::connectDestroyed()
         if (connectionCallback_) {
             connectionCallback_(shared_from_this());
         }
+    }
+
+    // 连接关闭时应取消定时器
+    // 如果不取消，TimerQueue中的回调函数（bind）将持有conn的shared_ptr，导致conn无法析构
+    if(ioLoop_) {
+        ioLoop_->cancel(idleTimer_);
     }
 
     // 从 Poller 中彻底移除 Channel

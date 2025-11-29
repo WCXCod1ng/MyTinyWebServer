@@ -29,6 +29,9 @@ public:
 
         // 设置线程数量 (3个 SubReactor + 1个 MainReactor)
         server_.setThreadNum(3);
+
+        // 设置连接的存储时间为10秒
+        server_.setIdleTimeoutSeconds(10.0);
     }
 
     void start() {
@@ -90,6 +93,11 @@ int main() {
 
     // 启动服务器
     server.start();
+
+    // // 执行一个定时任务
+    // loop.runEvery(5, []() {
+    //    LOG_INFO("Server is alive");
+    // });
 
     // 开启循环
     loop.loop();

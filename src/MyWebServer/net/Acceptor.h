@@ -47,7 +47,7 @@ private:
     /// RAII 管理 listenfd
     /// 注意，它必须是非阻塞的（Non-blocking），这是 Reactor 模型的基石
     Socket acceptSocket_;
-    /// 它是连接 acceptSocket_ 和 EventLoop 的桥梁。
+    /// 它是连接 acceptSocket_（监听socket） 和 它对应的EventLoop 的桥梁。
     /// 它关注 EPOLLIN 事件。当内核完成三次握手，全连接队列里有新连接时，它会通知 Acceptor 执行 handleRead()。
     /// note 监听socket通常采用 LT (Level Trigger, 水平触发) 模式。
     /// 原因：1. ET模式带来的性能他提升不大 2. 如果用 ET 模式，当并发量极大时，一次 accept 可能处理不完队列里所有的握手请求，剩下的请求如果不处理，下次就不会触发事件了（直到有新数据），导致新连接卡死。虽然可以用 while(accept) 循环处理，但 LT 模式更简单稳健——只要队列里还有连接，epoll 就会一直通知你

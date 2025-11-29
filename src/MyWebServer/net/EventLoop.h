@@ -7,10 +7,14 @@
 #include <functional>
 #include <thread>
 
+#include "Callbacks.h"
+#include "TimerId.h"
 #include "base/NonCopyable.h"
+#include "base/TimeStamp.h"
 
 class Channel;
 class EpollPoller;
+class TimerQueue;
 
 /**
  * @brief 事件循环类 (One Loop Per Thread)
@@ -25,6 +29,27 @@ public:
 
     EventLoop();
     ~EventLoop();
+
+    // 定时器相关的接口
+
+    /// 在指定时间执行
+    /// @param time 执行回调的时间点
+    /// @param cb 需要执行的回调
+    TimerId runAt(TimeStamp time, TimerCallback cb);
+
+    /// 在delay秒后执行回调
+    /// @param delay 延迟执行时间
+    /// @param cb 需要执行的回调
+    TimerId runAfter(double delay, TimerCallback cb);
+
+    /// 每个interval秒执行一次
+    /// @param interval 周期执行的间隔
+    /// @param cb 需要执行的回调
+    TimerId runEvery(double interval, TimerCallback cb);
+
+    /// 取消指定的定时器
+    /// @param timerId 需要取消的定时器的句柄
+    void cancel(TimerId timerId);
 
     // 开启事件循环 (必须在创建对象的线程中调用)
     void loop();
@@ -46,13 +71,13 @@ public:
     //唤醒 Loop 所在线程 (向 eventfd 写数据)
     void wakeup();
 
-    // Poller 的代理方法
+    // Poller 的代理方法，对它的调用实际上最终会被Poller执行
     void updateChannel(Channel* channel);
     void removeChannel(Channel* channel);
     bool hasChannel(Channel* channel);
 
     // 判断当前线程是否是 Loop 所在线程
-    bool isInLoopThread() const { return threadId_ == std::this_thread::get_id(); }
+    [[nodiscard]] bool isInLoopThread() const { return threadId_ == std::this_thread::get_id(); }
 
     // 断言
     void assertInLoopThread() {
@@ -63,7 +88,7 @@ public:
 
 private:
     // 处理 wakeupfd 的读事件（读取 8 字节，防止电平触发模式下反复触发）
-    void handleRead();
+    void handleWakeupChannelRead();
     // 执行队列中的回调函数
     void doPendingFunctors();
     void abortNotInLoopThread();
@@ -91,6 +116,9 @@ private:
     std::vector<Functor> pendingFunctors_;
     // 标识当前是否正在执行等待队列中的任务
     std::atomic<bool> callingPendingFunctors_;
+
+    /// 定时器队列（持有）
+    std::unique_ptr<TimerQueue> timerQueue_;
 };
 
 

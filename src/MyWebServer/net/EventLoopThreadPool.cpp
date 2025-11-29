@@ -9,6 +9,7 @@
 
 #include "EventLoop.h"
 #include "EventLoopThread.h"
+#include "log/logger.h"
 
 EventLoopThreadPool::EventLoopThreadPool(EventLoop* baseLoop, const size_t numThreads, std::string name)
     : baseLoop_(baseLoop),
@@ -25,6 +26,7 @@ EventLoopThreadPool::~EventLoopThreadPool()
     // EventLoopThread 析构时会 join 线程，
     // 线程结束会导致栈上的 EventLoop 销毁。
     // 所以这里不需要手动做任何清理。
+    LOG_INFO("线程池被析构");
 }
 
 void EventLoopThreadPool::start(const ThreadInitCallback& initial_callback)

@@ -10,6 +10,7 @@
 
 #include "Callbacks.h"
 #include "InetAddress.h"
+#include "TimerId.h"
 #include "base/Buffer.h"
 #include "base/NonCopyable.h"
 #include "base/TimeStamp.h"
@@ -40,7 +41,8 @@ public:
                   const std::string& name,
                   int sockfd,
                   const InetAddress& localAddr,
-                  const InetAddress& peerAddr);
+                  const InetAddress& peerAddr,
+                  const double idleTimeoutSeconds);
     ~TcpConnection();
 
     EventLoop* getLoop() const { return ioLoop_; }
@@ -105,8 +107,19 @@ private:
 
     void setState(const StateE s) { state_ = s; }
 
-    // 所属的 SubReactor
-    EventLoop* ioLoop_;
+    // --- 定时器相关 ---
+    /// 刷新定时器的生存期
+    void extendLifetime();
+
+    /// 定时器到期后的回调（准确来讲是timerfd到期后会向触发一个读事件，与之相关的Channel的回调就会被调用，并且又会调用定时器的回调，将来handleTimeout就是作为定时器的回调的）
+    void handleTimeout();
+
+
+    /// 所属的 SubReactor
+    /// 一个EventLoop在运行期间可以管理成千上万的TcpConnection，但一个TcpConnection在其整个生命周期内只属于一个EventLoop，该TcpConnection归属于哪个EventLoop，是咋accept之后就确定好的了（之后永远不变）
+    /// note 这里不能替换为引用，因为在极端情况下TcpConnection的生命周期比EventLoop还要长，这实际上是逻辑错误（编译器会假设引用在其生命周期内一直有效，可能会导致错误的优化）；而使用指针时，只是野指针，编译器允许这种行为
+    /// 因为TcpConnection是shared_ptr，而它所属的EventLoop只是一个线程栈上的对象，在该EventLoop析构之后，该TcpConnection可能会因为回调而被其他线程持有，这样就造成了TcpConnection生命周期长于所属的EventLoop的现象
+    EventLoop* const ioLoop_;
     // 名称
     const std::string name_;
 
@@ -120,10 +133,8 @@ private:
     std::unique_ptr<Channel> channel_;
 
     // 地址信息
-    // 本地地址
-    const InetAddress localAddr_;
-    // 对端地址（客户端地址）
-    const InetAddress peerAddr_;
+    const InetAddress localAddr_; // 本地地址
+    const InetAddress peerAddr_; // 对端地址（客户端地址）
 
     // 回调函数
     ConnectionCallback connectionCallback_;       // 连接建立/断开回调
@@ -136,6 +147,12 @@ private:
     size_t highWaterMark_; // 高水位阈值 (默认 64MB)
     Buffer inputBuffer_;   // 接收缓冲区
     Buffer outputBuffer_;  // 发送缓冲区
+
+    // 定时器相关
+    // 如果大于0表示允许keepAlive倒计时，也即对于keepAlive，在倒计时结束后自动断开连接，单位是秒
+    // 如果等于0表示用不超时
+    double idleTimeoutSeconds_;
+    TimerId idleTimer_;
 
     // 任意类型的上下文 (存储 HttpContext)
     std::any context_;
