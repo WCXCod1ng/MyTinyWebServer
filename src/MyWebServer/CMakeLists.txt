@@ -1,60 +1,29 @@
-# 1. 定义组成这个库的所有源文件
-#    当未来有更多模块时，只需在这里添加它们的 .cpp 文件路径
+# 1. 定义组成这个库的所有源文件，注意只能添加 .cpp 文件
+# 可以使用file会自动查找所有 .cpp 文件
+#    这将递归地在当前目录 (src/MyWebServer) 下查找所有 .cpp 文件
+#file(GLOB_RECURSE LIB_SOURCES CONFIGURE_DEPENDS "*.cpp")
+# 但是为了清晰起见，这里我们手动列出所有源文件
 set(LIB_SOURCES
-#        mysql_connection_pool/mysql_connection_pool.cpp
-#        mysql_connection_pool/mysql_connection_pool.h
-#        webserver/webserver.cpp
-#        webserver/webserver.h
-#        http/http_conn.cpp
-#        http/http_conn.h
-#        utils/timer.cpp
-#        utils/timer.h
-#        utils/block_queue.h
-#        utils/concurrent_queue.h
-#        http/router.cpp
-#        http/router.h
-#        http/http_define.h
-#        utils/url.h
-#        utils/restful.h
-#        utils/error_handler.h
         log/logger.cpp
-        log/logger.h
-        log/sink.h
-        log/file_sink.h
-        log/console_sink.h
         log/file_sink.cpp
-        base/NonCopyable.h
-        base/ThreadPool.h
         base/Buffer.cpp
-        base/Buffer.h
-        base/TimeStamp.h
-        net/Channel.h
         net/Channel.cpp
         net/EventLoop.cpp
-        net/EventLoop.h
         net/EpollPoller.cpp
-        net/EpollPoller.h
         net/EventLoopThread.cpp
-        net/EventLoopThread.h
         net/EventLoopThreadPool.cpp
-        net/EventLoopThreadPool.h
         net/InetAddress.cpp
-        net/InetAddress.h
         net/Socket.cpp
-        net/Socket.h
         net/Acceptor.cpp
-        net/Acceptor.h
         net/TcpConnection.cpp
-        net/TcpConnection.h
-        net/Callbacks.h
         net/TcpServer.cpp
-        net/TcpServer.h
-        base/utils.h
         net/Timer.cpp
-        net/Timer.h
-        net/TimerId.h
         net/TimerQueue.cpp
-        net/TimerQueue.h
+        http/HttpContext.cpp
+        http/HttpServer.cpp
+        http/WebRouter.cpp
+        http/WebFrame.cpp
+        mysql_connection_pool/mysql_connection_pool.cpp
 )
 
 # 2. 创建一个库目标

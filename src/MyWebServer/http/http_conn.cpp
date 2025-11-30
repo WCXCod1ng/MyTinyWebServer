@@ -16,6 +16,7 @@
 #include "log/logger.h"
 #include "utils/error_handler.h"
 #include "utils/url.h"
+#include "WebRouter.h"
 
 // HttpConnection::HttpConnection(int sockfd, const sockaddr_in &addr, const std::string& doc_root, mysql_conn_pool &sql_pool, const Router& router, EpollModifier epoll_modifier):
 HttpConnection::HttpConnection(int sockfd, const sockaddr_in &addr, const std::string& doc_root, const Router& router, EpollModifier epoll_modifier):

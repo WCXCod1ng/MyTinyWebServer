@@ -1,5 +1,5 @@
 
-# 1. 创建用于测试的可执行文件
+# 为run_tests可执行文件添加CMake配置
 add_executable(run_tests
         cpp/lock_test.cpp
         cpp/mysql_connection_pool_test.cpp
@@ -7,11 +7,16 @@ add_executable(run_tests
         cpp/block_queue_test.cpp
         cpp/logger_test.cpp
         cpp/simple_server_test.cpp
+        cpp/web_frame_test.cpp
 )
-
-# 2. 链接测试程序需要的库
-#    首先链接我们自己的 WebServerLib
 target_link_libraries(run_tests PRIVATE WebServerLib)
+
+
+# 为http_server_test可执行文件添加CMake配置
+add_executable(http_server_test
+        cpp/http_server_test.cpp
+)
+target_link_libraries(http_server_test PRIVATE WebServerLib)
 
 # 3. 链接 GoogleTest 库
 #    GTest::gtest_main 包含了 GTest 库本身以及一个预编译好的 main 函数

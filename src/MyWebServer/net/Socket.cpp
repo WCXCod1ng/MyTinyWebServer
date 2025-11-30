@@ -45,7 +45,7 @@ int Socket::accept(InetAddress* peeraddr) {
         peeraddr->setSockAddr(addr);
     } else {
         // 这里可能会发生错误，比如 EMFILE (fd 用完了)
-        // 实际上完整的服务器需要处理 fd 耗尽的情况（使用 idleFd 占位技术），这里先略过
+        // 当然在ET模式下可能因为数据读完而导致connfd为-1，我们统一交给调用者处理
         LOG_ERROR("Socket::accept error");
     }
     return connfd;

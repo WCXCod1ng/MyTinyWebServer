@@ -31,7 +31,7 @@ TcpServer::TcpServer(EventLoop* loop,
       ipPort_(listenAddr.toIpPort()),
       name_(nameArg),
       acceptor_(new Acceptor(loop, listenAddr, option == kReusePort)),
-      threadPool_(std::make_unique<EventLoopThreadPool>(loop, numThreads, name_)), // 创建线程池
+      threadPool_(std::make_unique<EventLoopThreadPool>(loop, numThreads, name_)), // 使用TcpServer的名称作为线程池的名称（前缀）
       connectionCallback_(),
       messageCallback_(),
       nextConnId_(1),

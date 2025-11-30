@@ -36,6 +36,10 @@ public:
 
     TimeStamp addSeconds(double seconds) const;
 
+    void swap(TimeStamp time_stamp) {
+        this->micro_seconds_since_epoch_ = time_stamp.micro_seconds_since_epoch_;
+    }
+
 private:
     int64_t micro_seconds_since_epoch_;
 };

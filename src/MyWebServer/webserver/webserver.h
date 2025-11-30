@@ -13,7 +13,7 @@
 #include <unordered_map>
 #include <atomic>
 
-#include "../thread_pool/thread_pool.h"       // 你实现的线程池
+#include "../base/ThreadPool.h"       // 你实现的线程池
 #include "../mysql_connection_pool/mysql_connection_pool.h"  // 你实现的数据库连接池
 #include "../http/http_conn.h"   // 模拟的HTTP连接类
 #include "../utils/timer.h"            // 模拟的定时器管理器

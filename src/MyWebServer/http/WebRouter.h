@@ -4,13 +4,16 @@
 
 #ifndef ROUTER_H
 #define ROUTER_H
+#include <functional>
 #include <memory>
 #include <string>
 #include <unordered_map>
 #include <utility>
 #include <vector>
 
-#include "http_define.h"
+#include "Context.h"
+#include "HttpRequest.h"
+#include "HttpResponse.h"
 
 enum class RouteStatus {
     FOUND = 0, // 找到
@@ -18,11 +21,15 @@ enum class RouteStatus {
     NOT_FOUND_METHOD = 2, // 路径可以匹配上，但方法找不到
 };
 
+// 定义业务处理函数的签名
+// 类似于 Spring 中的 Controller 方法
+using HandlerFunc = std::function<void(Context&)>;
+
 /// 定义路由查找结果的类型
 /// 这里还使用一个map的原因是为了针对动态参数和通配符匹配，当使用这两种方式时，需要知道它们分别匹配了什么内容（业务handler才能进一步处理）
 /// 为了支持不同请求方式，还需要一个返回值表明请求状态：是否找到，以及没有找到的原因（路径不匹配、路径匹配但是没有对应的方法）
 /// 只有当0位置是FOUND，其他下标的值才不为空
-using RouteResult = std::tuple<RouteStatus, myhttp::ApiHandler, std::unordered_map<std::string, std::string>>;
+using RouteResult = std::tuple<RouteStatus, HandlerFunc, std::unordered_map<std::string, std::string>>;
 
 /// 当前使用字典树实现路由
 /// todo 使用基数树实现路由（请求分发），采用了基数树后，支持更多的路由功能（按照优先级降序，即先按照静态路由匹配，然后是动态参数，最后是通配符）：
@@ -34,26 +41,26 @@ using RouteResult = std::tuple<RouteStatus, myhttp::ApiHandler, std::unordered_m
 /// └── "api/v1/" (合并了的边)
 ///      ├── "users" -> [存储 /api/v1/users 的处理器]
 ///      └── "orders" -> [存储 /api/v1/orders 的处理器]
-class Router {
+class WebRouter {
 public:
     // 构造函数
-    Router() {
+    WebRouter() {
         // 创建一个根节点，代表根目录“/”，作为所有路径的起点
         m_root = std::make_unique<Node>();
     }
 
     /// 添加一条路由规则
     /// 核心的路由注册函数。它会接收一个路径、HTTP方法和处理器，然后解析路径，遍历树，在适当的位置创建新节点，并最终将处理器存放在目标节点的 handlers 映射中
-    void add_route(const std::string& path, myhttp::Method method, myhttp::ApiHandler handler);
+    void add_route(const std::string& path, Method method, HandlerFunc handler);
 
     // 方便的辅助函数
-    void get(const std::string& path, myhttp::ApiHandler handler) {
+    void get(const std::string& path, HandlerFunc handler) {
         // C++11 特性: std::move 用于将 handler 的所有权“移动”给 add_route，
         // 避免了不必要的拷贝，提高了效率。
-        add_route(path, myhttp::Method::GET, std::move(handler));
+        add_route(path, Method::kGet, std::move(handler));
     }
-    void post(const std::string& path, myhttp::ApiHandler handler) {
-        add_route(path, myhttp::Method::POST, std::move(handler));
+    void post(const std::string& path, HandlerFunc handler) {
+        add_route(path, Method::kPost, std::move(handler));
     }
     // ... 可以为其他 HTTP 方法添加类似函数 ...
 
@@ -65,7 +72,7 @@ public:
     /// @return 返回一个 pair:
     ///         - .first: 找到的 ApiHandler (如果没找到则为空)
     ///         - .second: 从路径中解析出的参数 map (例如 {"id": "123"})
-    [[nodiscard]] RouteResult find_route(const std::string& path, myhttp::Method method) const;
+    [[nodiscard]] RouteResult find_route(const std::string& path, Method method) const;
 
 private:
     // 内部的树节点结构
@@ -74,7 +81,7 @@ private:
         std::string segment;
 
         // 存储该节点对应的不同 HTTP 方法的处理器，基数树只能根据路径判断，如果需要根据方法的不同选择不同的处理逻辑，就需要在每个节点内部维护一个不同方法到handler的映射
-        std::unordered_map<myhttp::Method, myhttp::ApiHandler> handlers;
+        std::unordered_map<Method, HandlerFunc> handlers;
 
         // 子节点
         // 使用 C++11 智能指针 std::unique_ptr 自动管理内存

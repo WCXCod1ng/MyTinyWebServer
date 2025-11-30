@@ -63,6 +63,8 @@ void Acceptor::handleRead()
     // 此时运行在 Main Loop 线程
     loop_->assertInLoopThread();
 
+    LOG_INFO("有新连接到来");
+
     InetAddress peerAddr;
 
     // ET模式的核心：循环Accept

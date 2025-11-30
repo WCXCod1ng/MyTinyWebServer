@@ -94,13 +94,11 @@ void Channel::handleEventWithGuard(TimeStamp receiveTime)
     // 1. EPOLLHUP表示读半部和写半部都已经被关闭（完全关闭），属于真正的关闭
     // 注意：EPOLLHUP 经常和 EPOLLIN 一起出现，当一起出现时表明虽然连接关闭，但是还有残留的可读数据，那么不应当关闭，而是归类为可读（3）；只有“只有 EPOLLHUP 没有 EPOLLIN”时，才认为是异常挂起，直接关闭
     if ((revents_ & EPOLLHUP) && !(revents_ & EPOLLIN)) {
-        LOG_WARN("Channel::handleEventWithGuard EPOLLHUP fd = {}", fd_);
         if (closeCallback_) closeCallback_();
     }
 
     // 2. 处理错误 (EPOLLERR)
     if (revents_ & EPOLLERR) {
-        LOG_ERROR("Channel::handleEventWithGuard EPOLLERR fd = {}", fd_);
         if (errorCallback_) errorCallback_();
     }
 
@@ -108,13 +106,11 @@ void Channel::handleEventWithGuard(TimeStamp receiveTime)
     // 注意：EPOLLRDHUP表明对端调用了close()或shutdown(SHUT_WR)，对端不能再发送数据了；但是本端仍然可以继续发送数据（读则会返回0，即EOF）
     // 这里的意思是交给读回调的read()/recv()处理：（1）如果返回>0，正常数据；（2）如果返回0，对端关闭写方向（可能半关闭、也可能全关闭）；（3）如果返回-1+EAGAIN，暂时无数据
     if (revents_ & (EPOLLIN | EPOLLPRI | EPOLLRDHUP)) {
-        LOG_INFO("有数据可读");
         if (readCallback_) readCallback_(receiveTime);
     }
 
     // 4. 处理可写 (EPOLLOUT)
     if (revents_ & EPOLLOUT) {
-        LOG_INFO("有数据可写");
         if (writeCallback_) writeCallback_();
     }
 }

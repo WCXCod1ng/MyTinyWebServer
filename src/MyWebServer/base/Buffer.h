@@ -35,7 +35,7 @@ public:
     /// 最开始部分的字节数
     [[nodiscard]] size_t prependableBytes() const { return readIndex_; }
 
-    /// 返回可读的第一个下标
+    /// 返回可读的第一个下标，可以认为是当前位置（可读）
     [[nodiscard]] const char* peek() const { return begin() + readIndex_; }
 
     /// 取出 len 字节的数据（移动 readIndex）
@@ -46,6 +46,12 @@ public:
         } else {
             retrieveAll();
         }
+    }
+
+    void retrieveUntil(const char* pos) {
+        assert(peek() <= pos);
+        assert(pos <= beginWrite());
+        retrieve(pos - peek());
     }
 
     /// 清空所有可读的字节数，将指针回到开始位置
@@ -85,6 +91,17 @@ public:
     ssize_t readFd(int fd, int* saveErrno);
     /// 核心：写入 fd，将该Buffer中可读的部分写入socket缓冲区
     ssize_t writeFd(int fd, int* saveErrno);
+
+    /// 查找指定字符串，并返回指向其首元素的指针
+    [[nodiscard]] inline const char* findStr(const std::string& str) const {
+        return findStr(str.data(), str.length());
+    }
+    inline const char* findStr(const char* data, const size_t len) const {
+        const auto begin_write = beginWrite();
+        // 从可读区间中尝试读取数据
+        const char* crlf_idx = std::search(peek(), begin_write, data, data + len);
+        return crlf_idx == begin_write ? nullptr : crlf_idx;
+    }
 
 private:
     char* begin() { return &*buffer_.begin(); }

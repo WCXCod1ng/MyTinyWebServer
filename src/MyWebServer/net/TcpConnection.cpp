@@ -61,6 +61,9 @@ TcpConnection::~TcpConnection()
 void TcpConnection::connectEstablished()
 {
     ioLoop_->assertInLoopThread();
+
+    LOG_INFO("连接建立 fd = {}", channel_->fd());
+
     assert(state_ == kConnecting);
     setState(kConnected);
 
@@ -95,37 +98,27 @@ void TcpConnection::handleChannelRead(TimeStamp receiveTime)
     ssize_t n = inputBuffer_.readFd(channel_->fd(), &savedErrno);
 
     if (n > 0) {
+        LOG_INFO("读事件触发的原因是：有数据可读 fd = {}", channel_->fd());
         // 读取成功，回调用户的 onMessage，表示收到消息
         if (messageCallback_) {
             messageCallback_(shared_from_this(), &inputBuffer_, receiveTime);
         }
     } else if (n == 0) {
         // 读到 0 字节，表示对端关闭了连接 (FIN)
-        LOG_WARN("对端关闭，调用TcpConnection::handleClose()");
+        LOG_WARN("读事件触发的原因是：对端关闭，调用TcpConnection::handleChannelClose()");
         handleChannelClose();
     } else {
         // 出错
         errno = savedErrno;
-        LOG_ERROR("TcpConnection::handleRead");
+        LOG_ERROR("连接出现意外错误，调用TcpConnection::handleChannelError()");
         handleChannelError();
     }
 }
 
 // [核心] 发送数据的对外接口
-void TcpConnection::send(const std::string& buf)
+void TcpConnection::send(const std::string& message)
 {
-    if (state_ == kConnected) {
-        if (ioLoop_->isInLoopThread()) {
-            // 在自己线程中调用，则直接执行
-            sendInLoop(buf.c_str(), buf.size());
-        } else {
-            // 如果在其他线程调用 send，需要转发给 IO 线程
-            // 注意：这里必须拷贝 buf，因为它是引用，跨线程可能会失效
-            // 优化点：C++11 move 语义可以减少拷贝，或者 sendInLoopString
-            void (TcpConnection::*fp)(const void* data, size_t len) = &TcpConnection::sendInLoop;
-            ioLoop_->runInLoop(std::bind(fp, this, buf.c_str(), buf.size()));
-        }
-    }
+    send(message.data(), message.size());
 }
 
 void TcpConnection::send(const void *message, size_t len) {
@@ -143,10 +136,32 @@ void TcpConnection::send(const void *message, size_t len) {
     }
 }
 
+void TcpConnection::send(Buffer *buf) {
+    if (state_ == kConnected) {
+        if (ioLoop_->isInLoopThread()) {
+            // 1. 如果在当前 IO 线程：
+            // 直接把 Buffer 里的数据拿出来发送
+            sendInLoop(buf->peek(), buf->readableBytes());
+            // 发送完后，清空传入的 Buffer (通常语义是把数据“移交”给了连接)
+            buf->retrieveAll();
+        } else {
+            // 2. 如果跨线程：
+            // 必须把数据拷贝成 string (拥有所有权)，防止 Buffer 在原线程被销毁
+            // 这里的 retrieveAllAsString 会做一次拷贝
+            std::string msg = buf->retrieveAllAsString();
+            ioLoop_->runInLoop(
+                std::bind(&TcpConnection::sendInLoopString, this, std::move(msg))); // 使用 move 减少开销
+        }
+    }
+}
+
 // [核心] IO 线程内真正的发送逻辑
 void TcpConnection::sendInLoop(const void* data, size_t len)
 {
     ioLoop_->assertInLoopThread();
+
+    LOG_INFO("向连接中发送数据, fd = {}", channel_->fd());
+
     ssize_t nWritten = 0;
     size_t remaining = len;
     bool faultError = false;
@@ -168,7 +183,7 @@ void TcpConnection::sendInLoop(const void* data, size_t len)
         const char* ptr = static_cast<const char*>(data);
         // note ET模式下循环写，直到写完（或者写满）
         while(remaining > 0) {
-            ssize_t n = ::write(channel_->fd(), data, len);
+            ssize_t n = ::write(channel_->fd(), ptr, remaining);
             if(n > 0) {
                 // 写入成功，更新数据
                 nWritten += n;
@@ -182,12 +197,14 @@ void TcpConnection::sendInLoop(const void* data, size_t len)
                 }
                 // 真正的错误
                 LOG_ERROR("直接写操作出错");
-                nWritten = 0;
-                if (errno != EWOULDBLOCK) {
-                    if (errno == EPIPE || errno == ECONNRESET) {
-                        faultError = true;
-                    }
+                // nWritten = 0; // 注意，这里不能置为0，否则会导致数据重复发送
+
+                if (errno == EPIPE || errno == ECONNRESET) {
+                    faultError = true;
                 }
+
+                // 发生不可恢复的错误时，必须break
+                break;
             }
         }
 
@@ -229,6 +246,9 @@ void TcpConnection::sendInLoopString(const std::string &message) {
 void TcpConnection::handleChannelWrite()
 {
     ioLoop_->assertInLoopThread();
+
+    LOG_INFO("有新数据要写, fd = {}", channel_->fd());
+
     if (channel_->isWriting()) { // 当前Channel关注了写事件
 
         // 有数据可写入时，可以刷新定时器
@@ -324,7 +344,7 @@ void TcpConnection::extendLifetime() {
 
 void TcpConnection::handleTimeout() {
     // 定时器到期，说明这段时间内没有 extendLife 被调用
-    LOG_INFO("TcpConnection::handleTimeout - Force Close fd={}", channel_->fd());
+    LOG_INFO("连接超时 fd={}", channel_->fd());
 
     // 强制关闭连接
     forceClose();
@@ -337,7 +357,7 @@ void TcpConnection::handleTimeout() {
 void TcpConnection::handleChannelClose()
 {
     ioLoop_->assertInLoopThread();
-    LOG_INFO("对端连接关闭：fd={} state={}", channel_->fd(), (int)state_);
+    LOG_INFO("连接完全关闭：fd={} state={}", channel_->fd(), (int)state_);
     setState(kDisconnected);
 
     // 1. 停止关注所有事件
@@ -380,6 +400,8 @@ void TcpConnection::handleChannelError()
 void TcpConnection::connectDestroyed()
 {
     ioLoop_->assertInLoopThread();
+
+    LOG_INFO("彻底销毁连接 fd = {}", channel_->fd());
 
     if (state_ == kConnected) {
         setState(kDisconnected);

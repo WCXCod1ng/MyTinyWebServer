@@ -54,8 +54,9 @@ public:
 
     // --- 数据发送接口 ---
     // 线程安全，可以跨线程调用
-    void send(const std::string& buf);
+    void send(const std::string& message);
     void send(const void* message, size_t len);
+    void send(Buffer* buf);
 
     // --- 连接控制接口 ---
     // 关闭连接（优雅关闭：发送完缓冲区数据后关闭写端）
@@ -80,9 +81,28 @@ public:
     void connectDestroyed();
 
     // --- 上下文管理 (用于 HTTP 解析) ---
-    void setContext(const std::any& context) { context_ = context; }
-    const std::any& getContext() const { return context_; }
-    std::any* getMutableContext() { return &context_; }
+    // 设置context
+    void setContext(std::any context) {
+        context_ = std::move(context);
+    }
+    /// 获取裸指针
+    std::any* getMutableContext() {
+        return &context_;
+    }
+    /// 直接获取其中的值，注意可能会失败，一旦失败就会段错误
+    template<typename T>
+    T& getContextValue() {
+        return *std::any_cast<T>(&context_);
+    }
+    /// 安全版本
+    template<typename T>
+    std::optional<T&> tryGetContextValue() {
+        auto p = std::any_cast<T>(&context_);
+        if(p == nullptr) {
+            return std::nullopt;
+        }
+        return *p;
+    }
 
 private:
     enum StateE {

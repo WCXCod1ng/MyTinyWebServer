@@ -2,12 +2,12 @@
 // Created by user on 2025/11/16.
 //
 
-#include "router.h"
+#include "WebRouter.h"
 
 #include <format>
 #include <sstream>
 
-void Router::add_route(const std::string& path, myhttp::Method method, myhttp::ApiHandler handler) {
+void WebRouter::add_route(const std::string& path, Method method, HandlerFunc handler) {
     // 1. 分割路径
     const auto segments = split_path(path);
 
@@ -75,7 +75,7 @@ void Router::add_route(const std::string& path, myhttp::Method method, myhttp::A
     current_node->handlers[method] = std::move(handler);
 }
 
-RouteResult Router::find_route(const std::string &path, myhttp::Method method) const {
+RouteResult WebRouter::find_route(const std::string &path, Method method) const {
     // 1. 初始化
     Node* current_node = m_root.get();
     std::unordered_map<std::string, std::string> params;
@@ -123,7 +123,7 @@ RouteResult Router::find_route(const std::string &path, myhttp::Method method) c
         }
 
         // 如果以上都未匹配成功，说明没有对应的路由
-        return {RouteStatus::NOT_FOUND_URL, nullptr, {}};
+        return {RouteStatus::NOT_FOUND_URL, static_cast<HandlerFunc>(nullptr), {}};
     }
 
     // 到此说明匹配完毕
@@ -140,10 +140,10 @@ found_node_path:
     }
 
     // 6. 找到了对应的处理器
-    return {RouteStatus::FOUND, handler_it->second, params};
+    return {RouteStatus::FOUND, handler_it->second, std::move(params)};
 }
 
-std::vector<std::string> Router::split_path(const std::string &path) {
+std::vector<std::string> WebRouter::split_path(const std::string &path) {
     std::vector<std::string> segments;
     // 处理边界条件，即只由一个斜杠，此时segments也是有一个元素“/”
     if(path.empty() || path == "/") {
